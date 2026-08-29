@@ -1,14 +1,17 @@
-# MIUI IME Unlock
+# 解锁 HyperOS 全面屏优化
 
-解锁 MIUI 全面屏优化限制
+解锁 MIUI / HyperOS 全面屏键盘优化限制，并修复部分输入法解锁后**键盘异常增高**的问题。
+
+> **本项目为 fork**，上游为 [RC1844/MIUI_IME_Unlock](https://github.com/RC1844/MIUI_IME_Unlock)。
+> 本 fork 的改动：
+> - v1.17 移植 [WeType_UI_Enhanced](https://github.com/Yizhou147/WeType_UI_Enhanced) 的"键盘异常增高"修复（该修复已在 HyperOS 4.0 / Android 17 实机验证）
+> - 项目更名为"解锁 HyperOS 全面屏优化"
+> - 新增 GitHub Actions 云编译，push 到 `main` 自动构建发布
 
 ## 测试环境
 
-LSPosed v1.2.2(API 93.0)
-
-MUI 12.5
-
-Android 11(R,API 30)
+- HyperOS 4.0.0.27 Beta（Xiaomi 17 Pro / Android 17）——键盘增高修复验证环境
+- MIUI 12.5（Android 11, API 30）——上游原始测试环境
 
 ## 使用方法
 
@@ -16,19 +19,58 @@ Xposed API Version >= 93
 
 在作用域勾选需要解除限制的输入法即可，小米定制版也要勾上
 
+## 修复说明（v1.17）
+
+解锁全面屏优化后，MIUI / HyperOS 会把输入法窗口的可用区域扩展到屏幕底部（含导航栏），
+并在底部叠加 MIUI 底栏。部分输入法（如微信输入法 3.5.2、Gboard）会把内容视图填满整个
+输入区域，导致键盘内容顶入底栏 / 导航栏区域，键盘看起来异常增高。
+
+v1.17 起 hook `InputMethodBottomManager.addMiuiBottomView`，检测到该情况时：
+- 将输入法内容视图底部 padding 减去导航栏 inset；
+- 将 fullscreenArea 高度加回导航栏 inset。
+
+把被"顶高"的空间让还给 MIUI 底栏，键盘高度恢复正常；底栏隐藏或异常时自动完整还原，无副作用。
+
 ## 下载
 
-[app-release.apk](../../release)
+云编译产物：push 到 `main` 分支后由 GitHub Actions 自动构建并发布到 [Releases](../../releases)
 
 ## 特别说明
 
 1. 全面屏优化与百度输入法官方版存在兼容问题，这不属于本模块 BUG。
-2. 因为本人在用的是 MIUI12.5、Android11，所以对于其他版本的 MIUI 适配并不完整，存在不可用的可能性。
-3. ~~托盘按钮设置为小爱语音输入时，按钮失效不可用，目前未发现原因，但通过长按选择启动小爱似乎没有问题。~~
+2. 其他版本的 MIUI / HyperOS 适配依赖系统内部实现，存在不可用的可能性。
+3. 接受了"键盘异常增高"的修复后，如仍有个别输入法布局异常，请附带输入法版本号与日志反馈。
 4. 不接受任何为特定输入法适配 xxx 的请求，这不现实不合理。
-5. 使用了小白条沉浸模块的系统，可能在部分输入法上无法使用全面屏优化(郑重声明：这事关我屁事)
+5. 使用了小白条沉浸模块的系统，可能在部分输入法上无法使用全面屏优化。
 
 ## 更新日志
+
+v1.17
+
+    修复部分输入法（微信输入法 3.5.2、Gboard 等）全面屏优化后键盘异常增高
+    项目更名为"解锁 HyperOS 全面屏优化"
+    新增 GitHub Actions 云编译，push 到 main 自动构建发布
+
+v1.16
+
+    Hook 小米短语包名校验，修复第三方输入法无法获取系统剪贴板列表
+
+v1.14
+
+    修复背景颜色翻转屏幕后重置
+    不再记录完全透明的颜色
+
+v1.12
+
+    适配 Android 12
+
+v1.11
+
+    重构 MainHook，优化执行逻辑
+
+v1.10
+
+    修复崩溃问题
 
 v1.09
 

@@ -12,8 +12,8 @@ android {
         applicationId = "com.xposed.miuiime"
         minSdk = 28
         targetSdk = 34
-        versionCode = 14
-        versionName = "1.16"
+        versionCode = 15
+        versionName = "1.17"
     }
 
     buildTypes {
@@ -36,7 +36,7 @@ android {
         }
     }
     applicationVariants.all {
-        val outputFileName = "Unlock_MIUI_IME-${versionName}_${buildType.name}.apk"
+        val outputFileName = "Unlock_HyperOS_IME-${versionName}_${buildType.name}.apk"
         outputs.all {
             val output = this as? com.android.build.gradle.internal.api.BaseVariantOutputImpl
             output?.outputFileName = outputFileName

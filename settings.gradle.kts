@@ -15,5 +15,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "MIUI IME"
+rootProject.name = "HyperOS IME Unlock"
 include(":app")
