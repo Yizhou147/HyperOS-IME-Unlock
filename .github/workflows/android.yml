@@ -1,0 +1,72 @@
+name: 云编译 Release APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/build.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Build release APK
+        run: ./gradlew :app:assembleRelease --stacktrace
+
+      - name: Sign release APK
+        run: |
+          set -euo pipefail
+          KEYSTORE="$HOME/ime-release.keystore"
+          APK=$(ls app/build/outputs/apk/release/*unsigned*.apk | head -n1)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n1)
+          keytool -genkeypair -v -keystore "$KEYSTORE" -alias hyperosime -keyalg RSA -keysize 2048 \
+            -validity 10000 -storepass android -keypass android \
+            -dname "CN=HyperOS IME Unlock,O=Unlock,C=CN"
+          mkdir -p signed
+          "$APKSIGNER" sign --ks "$KEYSTORE" --ks-key-alias hyperosime \
+            --ks-pass pass:android --key-pass pass:android \
+            --out signed/Unlock_HyperOS_IME.apk "$APK"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Unlock_HyperOS_IME
+          path: signed/Unlock_HyperOS_IME.apk
+          retention-days: 30
+
+      - name: Create Release
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ github.run_number }}
+          name: 解锁 HyperOS 全面屏优化 build ${{ github.run_number }}
+          body: |
+            自动云编译构建 ${{ github.run_number }}（push 到 main 自动发布）
+            更新内容见 README「更新日志」。
+          files: signed/Unlock_HyperOS_IME.apk
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
