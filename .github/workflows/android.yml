@@ -40,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           KEYSTORE="$HOME/ime-release.keystore"
-          APK=$(ls app/build/outputs/apk/release/*unsigned*.apk | head -n1)
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -n1)
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n1)
           keytool -genkeypair -v -keystore "$KEYSTORE" -alias hyperosime -keyalg RSA -keysize 2048 \
             -validity 10000 -storepass android -keypass android \
