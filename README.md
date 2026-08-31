@@ -4,7 +4,7 @@
 
 > **本项目为 fork**，上游为 [RC1844/MIUI_IME_Unlock](https://github.com/RC1844/MIUI_IME_Unlock)。
 > 本 fork 的改动：
-> - v1.17 移植 [WeType_UI_Enhanced](https://github.com/Yizhou147/WeType_UI_Enhanced) 的"键盘异常增高"修复（该修复已在 HyperOS 4.0 / Android 17 实机验证）
+> - v1.17 移植 [WeType_UI_Enhanced](https://github.com/NEORUAA/WeType_UI_Enhanced) 的"键盘异常增高"修复（该修复已在 HyperOS 4.0 / Android 17 实机验证）
 > - 项目更名为"解锁 HyperOS 全面屏优化"
 > - 新增 GitHub Actions 云编译，push 到 `main` 自动构建发布
 
