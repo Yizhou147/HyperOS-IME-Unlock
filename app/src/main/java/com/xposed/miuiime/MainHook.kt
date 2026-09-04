@@ -7,6 +7,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import com.github.kyuubiran.ezxhelper.init.EzXHelperInit
 import com.github.kyuubiran.ezxhelper.utils.Log
@@ -42,6 +43,7 @@ class MainHook : IXposedHookLoadPackage {
         "com.miui.catcherpatch",
         "com.xiaomi.type",
     )
+    private val imeUnlockClasses = Collections.newSetFromMap(WeakHashMap<Class<*>, Boolean>())
     private val monitoredImeInputFrames = Collections.newSetFromMap(WeakHashMap<ViewGroup, Boolean>())
     private val originalImeContentBottomPaddings = WeakHashMap<View, Int>()
     private val originalFullscreenAreaHeights = WeakHashMap<ViewGroup, IntArray>()
@@ -70,6 +72,8 @@ class MainHook : IXposedHookLoadPackage {
         // 检查是否为小米定制输入法
         val isNonCustomize = !miuiImeList.contains(lpparam.packageName)
         if (isNonCustomize) {
+            // 窗口每次弹出/重建时兜底重新置位，防止系统运行期重置解锁状态
+            hookImeWindowReassert()
             val sInputMethodServiceInjector =
                 loadClassOrNull("android.inputmethodservice.InputMethodServiceInjector")
                     ?: loadClassOrNull("android.inputmethodservice.InputMethodServiceStubImpl")
@@ -113,6 +117,7 @@ class MainHook : IXposedHookLoadPackage {
                     hookSIsImeSupport(it)
                     hookIsXiaoAiEnable(it)
                     hookMiuiBottomInsetCompatibility(it)
+                    hookImeVersionSupportGate(it)
                 }
 
                 // 针对A11的修复切换输入法列表
@@ -135,9 +140,110 @@ class MainHook : IXposedHookLoadPackage {
     private fun hookSIsImeSupport(clazz: Class<*>) {
         kotlin.runCatching {
             clazz.putStaticObject("sIsImeSupport", 1)
+            imeUnlockClasses.add(clazz)
             Log.i("Success:Hook field sIsImeSupport")
         }.onFailure {
             Log.i("Failed:Hook field sIsImeSupport")
+            Log.i(it)
+        }
+    }
+
+    /**
+     * 兜底：在 IME 窗口每次弹出 / 服务重建时重新把 sIsImeSupport 置 1。
+     *
+     * 观察到的失效场景：调用系统安全键盘后，微信输入法 InputMethodService 在同一进程内
+     * onDestroy -> onCreate 重建，重建后 MIUI 重新评估"当前 IME 是否支持全面屏优化"，
+     * 可能把解锁状态重置。这里 hook 窗口生命周期，每次窗口显示都重新置位。
+     */
+    private fun hookImeWindowReassert() {
+        kotlin.runCatching {
+            val ims = loadClassOrNull("android.inputmethodservice.InputMethodService")
+                ?: error("Failed to load InputMethodService")
+            val reassert = {
+                imeUnlockClasses.forEach { clazz ->
+                    kotlin.runCatching { clazz.putStaticObject("sIsImeSupport", 1) }
+                }
+            }
+            runCatching { ims.getMethod("onWindowShown").hookAfter { reassert() } }
+            runCatching {
+                ims.getDeclaredMethod(
+                    "onStartInputView",
+                    EditorInfo::class.java,
+                    Boolean::class.javaPrimitiveType
+                ).hookAfter { reassert() }
+            }
+            runCatching { ims.getMethod("onCreate").hookAfter { reassert() } }
+            Log.i("Success:Hook IME window reassert")
+        }.onFailure {
+            Log.i("Failed:Hook IME window reassert")
+            Log.i(it)
+        }
+    }
+
+    /**
+     * 修复 IME 版本支持检查导致的解锁失效（安全键盘切换/服务重建后触发）。
+     *
+     * 现象：MIUI IMEBottomManager 打印 "ime version code is not support : xxx" 后
+     * 判定当前输入法不支持全面屏优化，不再添加 MIUI 底栏，键盘贴底。
+     * 该检查独立于 sIsImeSupport 字段，且只在运行期某些路径（如安全键盘切换后的
+     * 服务重建）执行，冷启动 hook 字段无法覆盖。
+     *
+     * 这里运行时用 DexKit 在承载 IMEBottomManager 的 dex 里按错误字符串定位检查方法，
+     * 让返回值恒为"支持"。
+     *
+     * @param clazz com.miui.inputmethod.InputMethodBottomManager
+     */
+    private fun hookImeVersionSupportGate(clazz: Class<*>) {
+        kotlin.runCatching {
+            System.loadLibrary("dexkit")
+        }.onFailure {
+            Log.i("Failed: load dexkit lib for IME version gate")
+            return
+        }
+
+        val dexPath = kotlin.runCatching {
+            clazz.protectionDomain?.codeSource?.location?.path
+        }.getOrNull()
+        if (dexPath.isNullOrEmpty()) {
+            Log.i("Failed: resolve dex path for IME version gate")
+            return
+        }
+
+        kotlin.runCatching {
+            DexKitBridge.create(dexPath).use { bridge ->
+                val candidates = bridge.findMethod {
+                    matcher {
+                        usingStrings("ime version code is not support")
+                    }
+                }
+                if (candidates.isEmpty()) {
+                    Log.i("Failed: IME version gate method not found by string")
+                    return@use
+                }
+                candidates.forEach { data ->
+                    kotlin.runCatching {
+                        val method = data.getMethodInstance(clazz.classLoader)
+                        method.isAccessible = true
+                        val ret = method.returnType
+                        Log.i(
+                            "VersionGate: ${method.declaringClass.name}.${method.name}" +
+                                "(${method.parameterTypes.joinToString { it.simpleName }}): ${ret.simpleName}"
+                        )
+                        when {
+                            ret == java.lang.Boolean.TYPE || ret == java.lang.Boolean::class.java ->
+                                method.hookReturnConstant(true)
+                            ret == java.lang.Integer.TYPE || ret == java.lang.Integer::class.java ->
+                                method.hookReturnConstant(1)
+                            else -> Log.i("VersionGate: skip return ${ret.simpleName}")
+                        }
+                    }.onFailure {
+                        Log.i("Failed: hook IME version gate method")
+                        Log.i(it)
+                    }
+                }
+            }
+        }.onFailure {
+            Log.i("Failed: Hook IME version support gate")
             Log.i(it)
         }
     }
