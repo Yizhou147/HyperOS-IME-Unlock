@@ -45,17 +45,13 @@ v1.17 起 hook `InputMethodBottomManager.addMiuiBottomView`，检测到该情况
 
 ## 更新日志
 
-v1.18
-
-    修复调用系统安全键盘后全面屏优化失效、键盘贴底的问题
-    原因：安全键盘切换会销毁并重建输入法服务，重建时 MIUI IMEBottomManager 执行
-    版本支持检查（ime version code is not support），判定失败后不再添加底栏
-    修复：DexKit 运行时定位版本检查方法并让其恒通过；同时在窗口生命周期兜底重新
-    置位 sIsImeSupport
-
 v1.17
 
     修复部分输入法（微信输入法 3.5.2、Gboard 等）全面屏优化后键盘异常增高
+    修复调用系统安全键盘后全面屏优化失效、键盘贴底的问题
+    （安全键盘切换会销毁并重建输入法服务，重建时 MIUI IMEBottomManager 执行
+    IME 版本支持检查判定失败后不再添加底栏；已用 DexKit 运行时使版本检查
+    恒通过，并在窗口生命周期兜底重新置位 sIsImeSupport）
     项目更名为"解锁 HyperOS 全面屏优化"
     新增 GitHub Actions 云编译，push 到 main 自动构建发布
 
