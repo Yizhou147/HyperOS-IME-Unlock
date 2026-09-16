@@ -1,5 +1,6 @@
 package com.xposed.miuiime
 
+import android.app.AndroidAppHelper
 import android.content.Context
 import android.os.Binder
 import android.provider.Settings
@@ -52,6 +53,8 @@ class MainHook : IXposedHookLoadPackage {
         Triple<WeakReference<ViewGroup>, WeakReference<View>, WeakReference<View>>
     >()
     private var navBarColor: Int? = null
+    // 临时诊断计数（定位搜狗底栏抬高问题用，定位后移除）
+    private var diagCount = 0
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         // 检查是否支持全面屏优化
@@ -70,6 +73,7 @@ class MainHook : IXposedHookLoadPackage {
     private fun startHook(lpparam: XC_LoadPackage.LoadPackageParam) {
         // 检查是否为小米定制输入法
         val isNonCustomize = !miuiImeList.contains(lpparam.packageName)
+        diag("startHook pkg=${lpparam.packageName} isNonCustomize=$isNonCustomize")
         if (isNonCustomize) {
             val sInputMethodServiceInjector =
                 loadClassOrNull("android.inputmethodservice.InputMethodServiceInjector")
@@ -98,6 +102,7 @@ class MainHook : IXposedHookLoadPackage {
             runCatching {
                 Class.forName("com.miui.inputmethod.InputMethodBottomManager", true, loader)
                 param.result = null
+                diag("loadDex: InputMethodBottomManager already loaded -> early return (hooks skipped)")
                 return@hookBefore
             }
             loader.invokeMethodAuto("addDexPath", dexPath)
@@ -110,6 +115,7 @@ class MainHook : IXposedHookLoadPackage {
                 "com.miui.inputmethod.InputMethodBottomManager",
                 loader
             )?.also {
+                diag("loadDex: InputMethodBottomManager loaded -> installing hooks")
                 if (isNonCustomize) {
                     hookSIsImeSupport(it)
                     hookIsXiaoAiEnable(it)
@@ -126,6 +132,7 @@ class MainHook : IXposedHookLoadPackage {
         }
 
         Log.i("Hook MIUI IME Done!")
+        diag("Hook MIUI IME Done! pkg=${lpparam.packageName}")
     }
 
     /**
@@ -137,22 +144,27 @@ class MainHook : IXposedHookLoadPackage {
         kotlin.runCatching {
             clazz.putStaticObject("sIsImeSupport", 1)
             Log.i("Success:Hook field sIsImeSupport")
+            diag("Success:Hook field sIsImeSupport on ${clazz.name}")
         }.onFailure {
             Log.i("Failed:Hook field sIsImeSupport")
             Log.i(it)
+            diag("Failed:Hook field sIsImeSupport on ${clazz.name}: $it")
         }
         // 切换输入法（含系统安全键盘）会在同一进程内销毁并重建输入法服务。此时承载
         // IMEBottomManager 的 dex/class 已经加载过，载入流程中"已加载就早退"的分支
         // 不会再置位支持状态，而 onDestroy 又会把 sIsImeSupport 重置为 -1，
         // 结果底栏不再添加、键盘贴底。因而在读取端兜住：让 isImeSupport() 恒为 true。
         kotlin.runCatching {
-            findAllMethods(clazz) {
+            val methods = findAllMethods(clazz) {
                 name == "isImeSupport" && returnType == Boolean::class.javaPrimitiveType
-            }.hookReturnConstant(true)
+            }
+            methods.hookReturnConstant(true)
             Log.i("Success:Hook method isImeSupport")
+            diag("Success:Hook method isImeSupport on ${clazz.name}, count=${methods.size}")
         }.onFailure {
             Log.i("Failed:Hook method isImeSupport")
             Log.i(it)
+            diag("Failed:Hook method isImeSupport on ${clazz.name}: $it")
         }
     }
 
@@ -261,6 +273,7 @@ class MainHook : IXposedHookLoadPackage {
         }.onFailure {
             Log.i("Failed:Hook MIUI bottom inset compatibility")
             Log.i(it)
+            diag("Failed:Hook MIUI bottom inset compatibility: $it")
         }
 
         clazz.declaredMethods
@@ -289,6 +302,7 @@ class MainHook : IXposedHookLoadPackage {
             WeakReference(rootView),
             WeakReference(bottomArea)
         )
+        dumpFrameState("register(addMiuiBottomView)", rootView, fullscreenArea, inputFrame, bottomArea, null)
         if (monitoredImeInputFrames.add(inputFrame)) {
             inputFrame.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
                 reconcileMiuiBottomFrame(inputFrame)
@@ -310,6 +324,59 @@ class MainHook : IXposedHookLoadPackage {
         }
     }
 
+    // ---- 临时诊断（定位搜狗底栏抬高问题，定位后整体移除）----
+
+    /**
+     * 本机 main logcat 被系统关闭（logcat -b main 无输出），无法从模块打日志，
+     * 因此把布局数据追加写到输入法进程私有目录，再用 adb + root 取出。
+     */
+    private fun diag(line: String) {
+        kotlin.runCatching {
+            val app = AndroidAppHelper.currentApplication() ?: return
+            val file = java.io.File(app.filesDir, "miuiime_diag.txt")
+            if (file.length() > 256 * 1024) return
+            file.appendText(line + "\n")
+        }
+    }
+
+    private fun describeView(v: View?): String {
+        if (v == null) return "null"
+        val loc = IntArray(2)
+        v.getLocationOnScreen(loc)
+        return "${v.javaClass.simpleName}@[${loc[0]},${loc[1]}] ${v.width}x${v.height}" +
+            " padT=${v.paddingTop} padB=${v.paddingBottom}" +
+            " bottom=${loc[1] + v.height}" +
+            " lp=${v.layoutParams?.height} vis=${v.visibility}" +
+            " parent=${v.parent?.javaClass?.simpleName}"
+    }
+
+    private fun dumpFrameState(
+        reason: String,
+        rootView: View,
+        fullscreenArea: ViewGroup,
+        inputFrame: ViewGroup,
+        bottomArea: View,
+        navigationInset: Int?,
+        extra: String = ""
+    ) {
+        if (diagCount >= 60) return
+        diagCount++
+        val sb = StringBuilder()
+        sb.appendLine("===== #$diagCount $reason =====")
+        sb.appendLine("navInset=$navigationInset $extra")
+        sb.appendLine("root       ${describeView(rootView)}")
+        sb.appendLine("fullscreen ${describeView(fullscreenArea)}")
+        sb.appendLine("inputFrame ${describeView(inputFrame)}")
+        sb.appendLine("bottomArea ${describeView(bottomArea)}")
+        for (i in 0 until fullscreenArea.childCount) {
+            sb.appendLine("  fs[$i] ${describeView(fullscreenArea.getChildAt(i))}")
+        }
+        for (i in 0 until inputFrame.childCount) {
+            sb.appendLine("  if[$i] ${describeView(inputFrame.getChildAt(i))}")
+        }
+        diag(sb.toString())
+    }
+
     private fun reconcileMiuiBottomFrame(inputFrame: ViewGroup) {
         val frameViews = miuiBottomFrameViews[inputFrame] ?: return
         val fullscreenArea = frameViews.first.get() ?: return
@@ -322,10 +389,18 @@ class MainHook : IXposedHookLoadPackage {
         val navigationInset = rootView.rootWindowInsets
             ?.getInsets(WindowInsets.Type.navigationBars())
             ?.bottom
+            ?.takeIf { it > 0 }
 
-        if (navigationInset == null || navigationInset <= 0 ||
-            !isBottomAreaActive(rootView, inputFrame, bottomArea, navigationInset)
-        ) {
+        val bottomAreaActive = navigationInset?.let {
+            isBottomAreaActive(rootView, inputFrame, bottomArea, it)
+        } == true
+        dumpFrameState(
+            "reconcile active=$bottomAreaActive",
+            rootView, fullscreenArea, inputFrame, bottomArea, navigationInset,
+            extra = "content=${describeView(contentView)}"
+        )
+
+        if (!bottomAreaActive) {
             restoreMiuiBottomFrame(inputFrame, fullscreenArea)
             return
         }
