@@ -350,6 +350,35 @@ class MainHook : IXposedHookLoadPackage {
             " parent=${v.parent?.javaClass?.simpleName}"
     }
 
+    private fun idName(v: View): String = kotlin.runCatching {
+        if (v.id == View.NO_ID) "-" else v.resources.getResourceEntryName(v.id)
+    }.getOrDefault("-")
+
+    /** 打印完整视图树（含 layoutParams / weight / margin / padding），定位多出来的空间归属 */
+    private fun dumpTree(root: View, maxDepth: Int = 6) {
+        val sb = StringBuilder()
+        fun walk(v: View, depth: Int) {
+            if (depth > maxDepth) return
+            val loc = IntArray(2)
+            v.getLocationOnScreen(loc)
+            val lp = v.layoutParams
+            val mlp = lp as? ViewGroup.MarginLayoutParams
+            sb.appendLine(
+                "${"  ".repeat(depth)}${v.javaClass.simpleName} id=${idName(v)}" +
+                    " @[${loc[0]},${loc[1]}] ${v.width}x${v.height}" +
+                    " lp=${lp?.width}x${lp?.height} w=${mlp?.weight}" +
+                    " m=[${mlp?.leftMargin},${mlp?.topMargin},${mlp?.rightMargin},${mlp?.bottomMargin}]" +
+                    " pad=[${v.paddingLeft},${v.paddingTop},${v.paddingRight},${v.paddingBottom}]" +
+                    " vis=${v.visibility}"
+            )
+            if (v is ViewGroup) {
+                for (i in 0 until minOf(v.childCount, 12)) walk(v.getChildAt(i), depth + 1)
+            }
+        }
+        walk(root, 0)
+        diag(sb.toString())
+    }
+
     private fun dumpFrameState(
         reason: String,
         rootView: View,
@@ -359,7 +388,7 @@ class MainHook : IXposedHookLoadPackage {
         navigationInset: Int?,
         extra: String = ""
     ) {
-        if (diagCount >= 60) return
+        if (diagCount >= 16) return
         diagCount++
         val sb = StringBuilder()
         sb.appendLine("===== #$diagCount $reason =====")
@@ -375,6 +404,8 @@ class MainHook : IXposedHookLoadPackage {
             sb.appendLine("  if[$i] ${describeView(inputFrame.getChildAt(i))}")
         }
         diag(sb.toString())
+        diag("-- view tree from rootView --")
+        dumpTree(rootView)
     }
 
     private fun reconcileMiuiBottomFrame(inputFrame: ViewGroup) {
