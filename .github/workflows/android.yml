@@ -56,6 +56,15 @@ jobs:
           echo "=== 签名证书（应按固定指纹输出）==="
           "$APKSIGNER" verify --print-certs signed/Unlock_HyperOS_IME.apk | head -6
 
+      - name: Read version
+        id: ver
+        run: |
+          V=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts)
+          C=$(grep -oP 'versionCode\s*=\s*\K[0-9]+' app/build.gradle.kts)
+          echo "name=$V" >> "$GITHUB_OUTPUT"
+          echo "code=$C" >> "$GITHUB_OUTPUT"
+          echo "版本：$V ($C)"
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -67,12 +76,55 @@ jobs:
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: v${{ github.run_number }}
-          name: 解锁 HyperOS 全面屏优化 build ${{ github.run_number }}
-          body: |
-            自动云编译构建 ${{ github.run_number }}（push 到 main 自动发布）
-            更新内容见 README「更新日志」。
+          tag_name: v${{ steps.ver.outputs.name }}
+          name: 解锁 HyperOS 全面屏优化 v${{ steps.ver.outputs.name }}
           files: signed/Unlock_HyperOS_IME.apk
-          prerelease: true
+          prerelease: false
+          body: |
+            ## 解锁 HyperOS 全面屏优化 v${{ steps.ver.outputs.name }}
+
+            解锁 MIUI / HyperOS 输入法全面屏键盘优化（底栏）限制，并修复解锁后键盘布局异常。
+
+            ### 更新内容
+
+            - 修复**切换输入法（含调用系统安全键盘）后全面屏优化失效、键盘贴底**
+              切换输入法会在同一进程内重建输入法服务，此时底部管理类已加载过，"已加载就早退"的分支
+              不再置位支持状态，而 `onDestroy` 又会把 `sIsImeSupport` 重置为 -1。
+              本版在读取端兜住：hook `isImeSupport()` 恒返回 true（同上游 PR #34）。
+            - 修复**部分输入法（微信输入法 3.5.2、Gboard 等）解锁后键盘异常增高**
+              检测到输入法内容视图填满输入区域时，把内容视图底部 padding 减去导航栏 inset，
+              并把 fullscreenArea 高度加回导航栏 inset，把被"顶高"的空间让还给 MIUI 底栏。
+            - 修复**搜狗输入法等 targetSdk < 35 的输入法底栏被整体抬高**
+              这类输入法在 Android 15+ 上窗口不是 edge-to-edge，系统会给窗口内容区加上导航栏高度的
+              margin 并保留导航栏背景，叠加 MIUI 底栏自身的 bottomMargin，导致底栏整体上抬 203px。
+              本版让输入法窗口改为 edge-to-edge，并在必要时补偿底栏 margin。
+            - 作用域新增 `com.xiaomi.type`（小米输入法）
+            - 改用**固定签名**，此后各版本可直接覆盖安装升级
+
+            ### 使用方法
+
+            1. 安装下方 APK。
+            2. 在 LSPosed 中启用模块 **「解锁 HyperOS 全面屏优化」**（包名 `com.xposed.miuiime`）。
+            3. 在模块的**作用域**中勾选：
+               - `系统框架`（android）
+               - `com.miui.phrase`（剪贴板与常用语）
+               - 需要解锁全面屏优化的**输入法**，小米定制版也要勾上
+                 （搜狗小米版、讯飞小米版、百度小米版、微信输入法、Gboard、小米输入法等）
+            4. 在系统设置中确认已开启**「全面屏键盘优化」**。
+            5. 重启输入法进程（或重启设备）使模块生效。
+
+            ### 环境要求
+
+            - Xposed API Version >= 93（LSPosed）
+            - MIUI / HyperOS，且 `ro.miui.support_miui_ime_bottom` 为 `1`
+
+            ### 注意事项
+
+            1. 全面屏优化与百度输入法官方版存在兼容问题，不属于本模块的 BUG。
+            2. 其他版本的 MIUI / HyperOS 适配依赖系统内部实现，存在不可用的可能性。
+            3. 如仍有个别输入法布局异常，请附带输入法版本号、系统版本号、是否在切换输入法后才出现，以及日志反馈。
+            4. 使用了小白条沉浸模块的系统，可能在部分输入法上无法使用全面屏优化。
+
+            版本号：`1.0`（versionCode `${{ steps.ver.outputs.code }}`）
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
