@@ -1,6 +1,5 @@
 package com.xposed.miuiime
 
-import android.app.AndroidAppHelper
 import android.content.Context
 import android.inputmethodservice.InputMethodService
 import android.os.Binder
@@ -10,7 +9,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.inputmethod.InputMethodManager
-import android.widget.LinearLayout
 import com.github.kyuubiran.ezxhelper.init.EzXHelperInit
 import com.github.kyuubiran.ezxhelper.utils.Log
 import com.github.kyuubiran.ezxhelper.utils.findAllMethods
@@ -55,8 +53,6 @@ class MainHook : IXposedHookLoadPackage {
         Triple<WeakReference<ViewGroup>, WeakReference<View>, WeakReference<View>>
     >()
     private var navBarColor: Int? = null
-    // 临时诊断计数（定位搜狗底栏抬高问题用，定位后移除）
-    private var diagCount = 0
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         // 检查是否支持全面屏优化
@@ -75,7 +71,6 @@ class MainHook : IXposedHookLoadPackage {
     private fun startHook(lpparam: XC_LoadPackage.LoadPackageParam) {
         // 检查是否为小米定制输入法
         val isNonCustomize = !miuiImeList.contains(lpparam.packageName)
-        diag("startHook pkg=${lpparam.packageName} isNonCustomize=$isNonCustomize")
         if (isNonCustomize) {
             hookImeWindowEdgeToEdge()
             val sInputMethodServiceInjector =
@@ -105,7 +100,6 @@ class MainHook : IXposedHookLoadPackage {
             runCatching {
                 Class.forName("com.miui.inputmethod.InputMethodBottomManager", true, loader)
                 param.result = null
-                diag("loadDex: InputMethodBottomManager already loaded -> early return (hooks skipped)")
                 return@hookBefore
             }
             loader.invokeMethodAuto("addDexPath", dexPath)
@@ -118,7 +112,6 @@ class MainHook : IXposedHookLoadPackage {
                 "com.miui.inputmethod.InputMethodBottomManager",
                 loader
             )?.also {
-                diag("loadDex: InputMethodBottomManager loaded -> installing hooks")
                 if (isNonCustomize) {
                     hookSIsImeSupport(it)
                     hookIsXiaoAiEnable(it)
@@ -135,7 +128,6 @@ class MainHook : IXposedHookLoadPackage {
         }
 
         Log.i("Hook MIUI IME Done!")
-        diag("Hook MIUI IME Done! pkg=${lpparam.packageName}")
     }
 
     /**
@@ -147,27 +139,22 @@ class MainHook : IXposedHookLoadPackage {
         kotlin.runCatching {
             clazz.putStaticObject("sIsImeSupport", 1)
             Log.i("Success:Hook field sIsImeSupport")
-            diag("Success:Hook field sIsImeSupport on ${clazz.name}")
         }.onFailure {
             Log.i("Failed:Hook field sIsImeSupport")
             Log.i(it)
-            diag("Failed:Hook field sIsImeSupport on ${clazz.name}: $it")
         }
         // 切换输入法（含系统安全键盘）会在同一进程内销毁并重建输入法服务。此时承载
         // IMEBottomManager 的 dex/class 已经加载过，载入流程中"已加载就早退"的分支
         // 不会再置位支持状态，而 onDestroy 又会把 sIsImeSupport 重置为 -1，
         // 结果底栏不再添加、键盘贴底。因而在读取端兜住：让 isImeSupport() 恒为 true。
         kotlin.runCatching {
-            val methods = findAllMethods(clazz) {
+            findAllMethods(clazz) {
                 name == "isImeSupport" && returnType == Boolean::class.javaPrimitiveType
-            }
-            methods.hookReturnConstant(true)
+            }.hookReturnConstant(true)
             Log.i("Success:Hook method isImeSupport")
-            diag("Success:Hook method isImeSupport on ${clazz.name}, count=${methods.size}")
         }.onFailure {
             Log.i("Failed:Hook method isImeSupport")
             Log.i(it)
-            diag("Failed:Hook method isImeSupport on ${clazz.name}: $it")
         }
     }
 
@@ -267,15 +254,13 @@ class MainHook : IXposedHookLoadPackage {
                                 ?: return@runCatching
                             // InputMethodService.getWindow() 返回 Dialog，再取一层才是 Window
                             service.window?.window?.setDecorFitsSystemWindows(false)
-                        }.onFailure { diag("Failed:setDecorFitsSystemWindows: $it") }
+                        }
                     }
                 }
             }
-            diag("Success:Hook IME window edge-to-edge")
         }.onFailure {
             Log.i("Failed:Hook IME window edge-to-edge")
             Log.i(it)
-            diag("Failed:Hook IME window edge-to-edge: $it")
         }
     }
 
@@ -297,37 +282,25 @@ class MainHook : IXposedHookLoadPackage {
         bottomArea.getLocationOnScreen(bottomLoc)
         if (bottomLoc[1] + bottomArea.height >= decorLoc[1] + decor.height) return
 
-        var changed = false
         (bottomArea.layoutParams as? ViewGroup.MarginLayoutParams)?.let { lp ->
             if (lp.bottomMargin != 0) {
                 lp.bottomMargin = 0
                 bottomArea.layoutParams = lp
-                changed = true
             }
         }
         if (decor is ViewGroup) {
             for (i in 0 until decor.childCount) {
                 val child = decor.getChildAt(i)
                 if (idName(child) == "navigationBarBackground") {
-                    if (child.visibility != View.GONE) {
-                        child.visibility = View.GONE
-                        changed = true
-                    }
+                    if (child.visibility != View.GONE) child.visibility = View.GONE
                     continue
                 }
                 val lp = child.layoutParams as? ViewGroup.MarginLayoutParams ?: continue
                 if (lp.bottomMargin > 0) {
                     lp.bottomMargin = 0
                     child.layoutParams = lp
-                    changed = true
                 }
             }
-        }
-        if (changed) {
-            diag(
-                "compensate: cleared bottom margins / hid navigationBarBackground" +
-                    " (decorBottom=${decorLoc[1] + decor.height} bottomAreaBottom=${bottomLoc[1] + bottomArea.height})"
-            )
         }
     }
 
@@ -365,7 +338,6 @@ class MainHook : IXposedHookLoadPackage {
         }.onFailure {
             Log.i("Failed:Hook MIUI bottom inset compatibility")
             Log.i(it)
-            diag("Failed:Hook MIUI bottom inset compatibility: $it")
         }
 
         clazz.declaredMethods
@@ -373,9 +345,7 @@ class MainHook : IXposedHookLoadPackage {
             .forEach { method ->
                 kotlin.runCatching {
                     method.isAccessible = true
-                    method.hookBefore { diagMarginState("before ${method.name}") }
                     method.hookAfter {
-                        diagMarginState("after ${method.name}")
                         reconcileCurrentImeFrame(clazz)
                     }
                 }.onFailure {
@@ -396,7 +366,6 @@ class MainHook : IXposedHookLoadPackage {
             WeakReference(rootView),
             WeakReference(bottomArea)
         )
-        dumpFrameState("register(addMiuiBottomView)", rootView, fullscreenArea, inputFrame, bottomArea, null)
         if (monitoredImeInputFrames.add(inputFrame)) {
             inputFrame.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
                 reconcileMiuiBottomFrame(inputFrame)
@@ -418,145 +387,10 @@ class MainHook : IXposedHookLoadPackage {
         }
     }
 
-    // ---- 临时诊断（定位搜狗底栏抬高问题，定位后整体移除）----
-
-    /**
-     * 本机 main logcat 被系统关闭（logcat -b main 无输出），无法从模块打日志，
-     * 因此把布局数据追加写到输入法进程私有目录，再用 adb + root 取出。
-     */
-    private fun diag(line: String) {
-        kotlin.runCatching {
-            val app = AndroidAppHelper.currentApplication() ?: return
-            val file = java.io.File(app.filesDir, "miuiime_diag.txt")
-            if (file.length() > 256 * 1024) return
-            file.appendText(line + "\n")
-        }
-    }
-
-    private fun describeView(v: View?): String {
-        if (v == null) return "null"
-        val loc = IntArray(2)
-        v.getLocationOnScreen(loc)
-        return "${v.javaClass.simpleName}@[${loc[0]},${loc[1]}] ${v.width}x${v.height}" +
-            " padT=${v.paddingTop} padB=${v.paddingBottom}" +
-            " bottom=${loc[1] + v.height}" +
-            " lp=${v.layoutParams?.height} vis=${v.visibility}" +
-            " parent=${v.parent?.javaClass?.simpleName}"
-    }
-
+    /** 取 View 的资源 id 名，用于识别 DecorView 里的 navigationBarBackground */
     private fun idName(v: View): String = kotlin.runCatching {
         if (v.id == View.NO_ID) "-" else v.resources.getResourceEntryName(v.id)
     }.getOrDefault("-")
-
-    /** 打印完整视图树（含 layoutParams / weight / margin / padding），定位多出来的空间归属 */
-    private fun dumpTree(root: View, maxDepth: Int = 6) {
-        val sb = StringBuilder()
-        var lines = 0
-        fun walk(v: View, depth: Int) {
-            if (depth > maxDepth || lines >= 300) return
-            lines++
-            val loc = IntArray(2)
-            v.getLocationOnScreen(loc)
-            val lp = v.layoutParams
-            val mlp = lp as? ViewGroup.MarginLayoutParams
-            val weight = (lp as? LinearLayout.LayoutParams)?.weight
-            sb.appendLine(
-                "${"  ".repeat(depth)}${v.javaClass.simpleName} id=${idName(v)}" +
-                    " @[${loc[0]},${loc[1]}] ${v.width}x${v.height}" +
-                    " lp=${lp?.width}x${lp?.height} w=$weight" +
-                    " m=[${mlp?.leftMargin},${mlp?.topMargin},${mlp?.rightMargin},${mlp?.bottomMargin}]" +
-                    " pad=[${v.paddingLeft},${v.paddingTop},${v.paddingRight},${v.paddingBottom}]" +
-                    " vis=${v.visibility}"
-            )
-            if (v is ViewGroup) {
-                for (i in 0 until minOf(v.childCount, 8)) walk(v.getChildAt(i), depth + 1)
-            }
-        }
-        walk(root, 0)
-        diag(sb.toString())
-    }
-
-    private fun dumpFrameState(
-        reason: String,
-        rootView: View,
-        fullscreenArea: ViewGroup,
-        inputFrame: ViewGroup,
-        bottomArea: View,
-        navigationInset: Int?,
-        extra: String = ""
-    ) {
-        if (diagCount >= 16) return
-        diagCount++
-        val sb = StringBuilder()
-        sb.appendLine("===== #$diagCount $reason =====")
-        sb.appendLine("navInset=$navigationInset $extra")
-        sb.appendLine("root       ${describeView(rootView)}")
-        sb.appendLine("fullscreen ${describeView(fullscreenArea)}")
-        sb.appendLine("inputFrame ${describeView(inputFrame)}")
-        sb.appendLine("bottomArea ${describeView(bottomArea)}")
-        for (i in 0 until fullscreenArea.childCount) {
-            sb.appendLine("  fs[$i] ${describeView(fullscreenArea.getChildAt(i))}")
-        }
-        for (i in 0 until inputFrame.childCount) {
-            sb.appendLine("  if[$i] ${describeView(inputFrame.getChildAt(i))}")
-        }
-        diag(sb.toString())
-        diag("-- view tree from rootView --")
-        dumpTree(rootView)
-        dumpInsetsAndDecor(rootView)
-    }
-
-    /** 打印各类型 inset 与 DecorView 层信息：定位 rootView 比窗口内容区矮 65px 的来源 */
-    private fun dumpInsetsAndDecor(rootView: View) {
-        kotlin.runCatching {
-            val insets = rootView.rootWindowInsets
-            if (insets != null) {
-                val types = listOf(
-                    "systemBars" to WindowInsets.Type.systemBars(),
-                    "navBars" to WindowInsets.Type.navigationBars(),
-                    "statusBars" to WindowInsets.Type.statusBars(),
-                    "ime" to WindowInsets.Type.ime(),
-                    "cutout" to WindowInsets.Type.displayCutout(),
-                    "mandGest" to WindowInsets.Type.mandatorySystemGestures(),
-                    "sysGest" to WindowInsets.Type.systemGestures(),
-                    "tappable" to WindowInsets.Type.tappableElement()
-                )
-                diag("insets(bottom): " + types.joinToString(" ") { (n, t) ->
-                    "$n=${insets.getInsets(t).bottom}"
-                })
-            }
-            val decor = rootView.rootView
-            if (decor != null) {
-                val loc = IntArray(2)
-                decor.getLocationOnScreen(loc)
-                diag(
-                    "decor=${decor.javaClass.simpleName} @[${loc[0]},${loc[1]}] " +
-                        "${decor.width}x${decor.height}" +
-                        " pad=[${decor.paddingLeft},${decor.paddingTop},${decor.paddingRight},${decor.paddingBottom}]"
-                )
-                diag("-- tree from decorView (depth<=4) --")
-                dumpTree(decor, 4)
-            }
-        }
-    }
-
-    /** 记录底栏 margin / 根布局高度：确认 138 的 bottomMargin 是哪个 MIUI 方法设置的 */
-    private var marginDiagCount = 0
-
-    private fun diagMarginState(tag: String) {
-        if (marginDiagCount >= 40) return
-        marginDiagCount++
-        miuiBottomFrameViews.forEach { (_, triple) ->
-            val bottom = triple.third.get()
-            val root = triple.second.get()
-            val lp = bottom?.layoutParams as? ViewGroup.MarginLayoutParams
-            diag(
-                "[margin] $tag bottomArea m=[${lp?.leftMargin},${lp?.topMargin},${lp?.rightMargin},${lp?.bottomMargin}]" +
-                    " h=${bottom?.height} vis=${bottom?.visibility}" +
-                    " | root h=${root?.height} lp=${root?.layoutParams?.height}"
-            )
-        }
-    }
 
     private fun reconcileMiuiBottomFrame(inputFrame: ViewGroup) {
         val frameViews = miuiBottomFrameViews[inputFrame] ?: return
@@ -577,11 +411,6 @@ class MainHook : IXposedHookLoadPackage {
         val bottomAreaActive = navigationInset?.let {
             isBottomAreaActive(rootView, inputFrame, bottomArea, it)
         } == true
-        dumpFrameState(
-            "reconcile active=$bottomAreaActive",
-            rootView, fullscreenArea, inputFrame, bottomArea, navigationInset,
-            extra = "content=${describeView(contentView)}"
-        )
 
         if (!bottomAreaActive) {
             restoreMiuiBottomFrame(inputFrame, fullscreenArea)

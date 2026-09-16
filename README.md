@@ -49,6 +49,8 @@ Xposed API Version >= 93
 
 云编译产物：push 到 `main` 分支后由 GitHub Actions 自动构建并发布到 [Releases](../../releases)
 
+所有构建使用同一固定签名，可直接覆盖安装升级，无需卸载旧版。
+
 ## 特别说明
 
 1. 全面屏优化与百度输入法官方版存在兼容问题，这不属于本模块 BUG。

@@ -41,16 +41,20 @@ jobs:
       - name: Sign release APK
         run: |
           set -euo pipefail
-          KEYSTORE="$HOME/ime-release.keystore"
           APK=$(ls app/build/outputs/apk/release/*.apk | head -n1)
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n1)
-          keytool -genkeypair -v -keystore "$KEYSTORE" -alias hyperosime -keyalg RSA -keysize 2048 \
-            -validity 10000 -storepass android -keypass android \
-            -dname "CN=HyperOS IME Unlock,O=Unlock,C=CN"
+          # 使用固定签名（keystore 来自仓库 Secrets），不再每次 keytool 临时生成，
+          # 否则每次构建的签名都不同，产物无法覆盖安装。
+          KEYSTORE="$RUNNER_TEMP/release.jks"
+          printf '%s' "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > "$KEYSTORE"
           mkdir -p signed
-          "$APKSIGNER" sign --ks "$KEYSTORE" --ks-key-alias hyperosime \
-            --ks-pass pass:android --key-pass pass:android \
+          "$APKSIGNER" sign --ks "$KEYSTORE" \
+            --ks-key-alias "${{ secrets.SIGNING_KEY_ALIAS }}" \
+            --ks-pass "pass:${{ secrets.SIGNING_STORE_PASSWORD }}" \
+            --key-pass "pass:${{ secrets.SIGNING_KEY_PASSWORD }}" \
             --out signed/Unlock_HyperOS_IME.apk "$APK"
+          echo "=== 签名证书（应按固定指纹输出）==="
+          "$APKSIGNER" verify --print-certs signed/Unlock_HyperOS_IME.apk | head -6
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
