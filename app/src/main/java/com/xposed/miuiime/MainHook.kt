@@ -282,7 +282,9 @@ class MainHook : IXposedHookLoadPackage {
             .forEach { method ->
                 kotlin.runCatching {
                     method.isAccessible = true
+                    method.hookBefore { diagMarginState("before ${method.name}") }
                     method.hookAfter {
+                        diagMarginState("after ${method.name}")
                         reconcileCurrentImeFrame(clazz)
                     }
                 }.onFailure {
@@ -358,8 +360,10 @@ class MainHook : IXposedHookLoadPackage {
     /** 打印完整视图树（含 layoutParams / weight / margin / padding），定位多出来的空间归属 */
     private fun dumpTree(root: View, maxDepth: Int = 6) {
         val sb = StringBuilder()
+        var lines = 0
         fun walk(v: View, depth: Int) {
-            if (depth > maxDepth) return
+            if (depth > maxDepth || lines >= 300) return
+            lines++
             val loc = IntArray(2)
             v.getLocationOnScreen(loc)
             val lp = v.layoutParams
@@ -374,7 +378,7 @@ class MainHook : IXposedHookLoadPackage {
                     " vis=${v.visibility}"
             )
             if (v is ViewGroup) {
-                for (i in 0 until minOf(v.childCount, 12)) walk(v.getChildAt(i), depth + 1)
+                for (i in 0 until minOf(v.childCount, 8)) walk(v.getChildAt(i), depth + 1)
             }
         }
         walk(root, 0)
@@ -408,6 +412,59 @@ class MainHook : IXposedHookLoadPackage {
         diag(sb.toString())
         diag("-- view tree from rootView --")
         dumpTree(rootView)
+        dumpInsetsAndDecor(rootView)
+    }
+
+    /** 打印各类型 inset 与 DecorView 层信息：定位 rootView 比窗口内容区矮 65px 的来源 */
+    private fun dumpInsetsAndDecor(rootView: View) {
+        kotlin.runCatching {
+            val insets = rootView.rootWindowInsets
+            if (insets != null) {
+                val types = listOf(
+                    "systemBars" to WindowInsets.Type.systemBars(),
+                    "navBars" to WindowInsets.Type.navigationBars(),
+                    "statusBars" to WindowInsets.Type.statusBars(),
+                    "ime" to WindowInsets.Type.ime(),
+                    "cutout" to WindowInsets.Type.displayCutout(),
+                    "mandGest" to WindowInsets.Type.mandatorySystemGestures(),
+                    "sysGest" to WindowInsets.Type.systemGestures(),
+                    "tappable" to WindowInsets.Type.tappableElement()
+                )
+                diag("insets(bottom): " + types.joinToString(" ") { (n, t) ->
+                    "$n=${insets.getInsets(t).bottom}"
+                })
+            }
+            val decor = rootView.rootView
+            if (decor != null) {
+                val loc = IntArray(2)
+                decor.getLocationOnScreen(loc)
+                diag(
+                    "decor=${decor.javaClass.simpleName} @[${loc[0]},${loc[1]}] " +
+                        "${decor.width}x${decor.height}" +
+                        " pad=[${decor.paddingLeft},${decor.paddingTop},${decor.paddingRight},${decor.paddingBottom}]"
+                )
+                diag("-- tree from decorView (depth<=4) --")
+                dumpTree(decor, 4)
+            }
+        }
+    }
+
+    /** 记录底栏 margin / 根布局高度：确认 138 的 bottomMargin 是哪个 MIUI 方法设置的 */
+    private var marginDiagCount = 0
+
+    private fun diagMarginState(tag: String) {
+        if (marginDiagCount >= 40) return
+        marginDiagCount++
+        miuiBottomFrameViews.forEach { (_, triple) ->
+            val bottom = triple.third.get()
+            val root = triple.second.get()
+            val lp = bottom?.layoutParams as? ViewGroup.MarginLayoutParams
+            diag(
+                "[margin] $tag bottomArea m=[${lp?.leftMargin},${lp?.topMargin},${lp?.rightMargin},${lp?.bottomMargin}]" +
+                    " h=${bottom?.height} vis=${bottom?.visibility}" +
+                    " | root h=${root?.height} lp=${root?.layoutParams?.height}"
+            )
+        }
     }
 
     private fun reconcileMiuiBottomFrame(inputFrame: ViewGroup) {
