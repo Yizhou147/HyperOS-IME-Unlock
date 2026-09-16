@@ -12,3 +12,7 @@ local.properties
 .project
 .settings
 *.log
+# 签名相关（正式 keystore 放在仓库外的 ../.signing/，这里再加一层保险）
+*.jks
+*.keystore
+signing.properties
