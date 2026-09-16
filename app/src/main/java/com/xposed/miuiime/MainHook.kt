@@ -9,6 +9,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.inputmethod.InputMethodManager
+import android.widget.LinearLayout
 import com.github.kyuubiran.ezxhelper.init.EzXHelperInit
 import com.github.kyuubiran.ezxhelper.utils.Log
 import com.github.kyuubiran.ezxhelper.utils.findAllMethods
@@ -363,10 +364,11 @@ class MainHook : IXposedHookLoadPackage {
             v.getLocationOnScreen(loc)
             val lp = v.layoutParams
             val mlp = lp as? ViewGroup.MarginLayoutParams
+            val weight = (lp as? LinearLayout.LayoutParams)?.weight
             sb.appendLine(
                 "${"  ".repeat(depth)}${v.javaClass.simpleName} id=${idName(v)}" +
                     " @[${loc[0]},${loc[1]}] ${v.width}x${v.height}" +
-                    " lp=${lp?.width}x${lp?.height} w=${mlp?.weight}" +
+                    " lp=${lp?.width}x${lp?.height} w=$weight" +
                     " m=[${mlp?.leftMargin},${mlp?.topMargin},${mlp?.rightMargin},${mlp?.bottomMargin}]" +
                     " pad=[${v.paddingLeft},${v.paddingTop},${v.paddingRight},${v.paddingBottom}]" +
                     " vis=${v.visibility}"
