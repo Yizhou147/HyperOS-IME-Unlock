@@ -12,8 +12,10 @@ android {
         applicationId = "com.xposed.miuiime"
         minSdk = 28
         targetSdk = 34
-        versionCode = 15
-        versionName = "1.17"
+        versionName = "1.0"
+        // versionCode 不从 1 重新开始：本模块此前以 1.17(15) 对外发布，
+        // 降到 1 会让已安装用户无法覆盖升级（Android 拒绝降级安装）。
+        versionCode = 16
     }
 
     buildTypes {
