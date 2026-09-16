@@ -20,8 +20,10 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # 不使用 android-actions/setup-android：runner 镜像已预装 Android SDK
+      # （ANDROID_HOME=/usr/local/lib/android/sdk，含 android-34 platform 与 build-tools 34.0.0），
+      # 而新版 sdkmanager 已无法解析该 action 默认安装的 'tools' 包，
+      # 会以 "Failed to find package 'tools'" 失败。
 
       - name: Cache Gradle dependencies
         uses: actions/cache@v4
@@ -59,7 +61,7 @@ jobs:
 
       - name: Create Release
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ github.run_number }}
           name: 解锁 HyperOS 全面屏优化 build ${{ github.run_number }}
