@@ -2,6 +2,7 @@ package com.xposed.miuiime
 
 import android.app.AndroidAppHelper
 import android.content.Context
+import android.inputmethodservice.InputMethodService
 import android.os.Binder
 import android.provider.Settings
 import android.view.LayoutInflater
@@ -76,6 +77,7 @@ class MainHook : IXposedHookLoadPackage {
         val isNonCustomize = !miuiImeList.contains(lpparam.packageName)
         diag("startHook pkg=${lpparam.packageName} isNonCustomize=$isNonCustomize")
         if (isNonCustomize) {
+            hookImeWindowEdgeToEdge()
             val sInputMethodServiceInjector =
                 loadClassOrNull("android.inputmethodservice.InputMethodServiceInjector")
                     ?: loadClassOrNull("android.inputmethodservice.InputMethodServiceStubImpl")
@@ -237,6 +239,95 @@ class MainHook : IXposedHookLoadPackage {
         }.onFailure {
             Log.i("Failed:Hook method deleteNotSupportIme")
             Log.i(it)
+        }
+    }
+
+    /**
+     * 让输入法窗口 edge-to-edge。
+     *
+     * Android 15+ 上 targetSdk<35 的应用窗口不是 edge-to-edge：系统会给 DecorView 的内容
+     * 容器设 marginBottom = 导航栏高度，并保留一块可见的 navigationBarBackground。普通应用
+     * 没问题，但输入法不同——MIUI 全面屏优化要求内容区一直延伸到屏幕底部，由 MIUI 底栏占据
+     * 导航栏位置。内容区被系统收缩后 MIUI 底栏会整体抬高：实测搜狗官方版（targetSdk=30）
+     * 底栏离屏幕底 203px = 内容容器 marginBottom 65 + 底栏自身 bottomMargin 138。
+     *
+     * 微信输入法（targetSdk 35）自身就是 edge-to-edge，所以没有这个问题。
+     */
+    private fun hookImeWindowEdgeToEdge() {
+        if (android.os.Build.VERSION.SDK_INT < 30) return
+        kotlin.runCatching {
+            val ims = loadClassOrNull("android.inputmethodservice.InputMethodService")
+                ?: error("Failed to load InputMethodService")
+            listOf("onCreate", "onWindowShown").forEach { name ->
+                ims.declaredMethods.firstOrNull { it.name == name }?.let { method ->
+                    method.isAccessible = true
+                    method.hookAfter { param ->
+                        kotlin.runCatching {
+                            val service = param.thisObject as? InputMethodService
+                                ?: return@runCatching
+                            // InputMethodService.getWindow() 返回 Dialog，再取一层才是 Window
+                            service.window?.window?.setDecorFitsSystemWindows(false)
+                        }.onFailure { diag("Failed:setDecorFitsSystemWindows: $it") }
+                    }
+                }
+            }
+            diag("Success:Hook IME window edge-to-edge")
+        }.onFailure {
+            Log.i("Failed:Hook IME window edge-to-edge")
+            Log.i(it)
+            diag("Failed:Hook IME window edge-to-edge: $it")
+        }
+    }
+
+    /**
+     * 兜底补偿：若输入法窗口仍未铺到屏幕底部（系统对 legacy 应用强制收缩内容区，
+     * 上面的 setDecorFitsSystemWindows 不生效时），手动把这三处修正回来：
+     *   - MIUI 底栏自身的 bottomMargin 归零
+     *   - DecorView 内容容器的 bottomMargin 归零（内容区延伸到底部）
+     *   - 隐藏 navigationBarBackground（否则它会盖住延伸下来的底栏）
+     *
+     * 只在底栏确实没到 DecorView 底部时执行，正常输入法（如微信）不会进入该分支。
+     */
+    private fun compensateLegacyWindowInsets(rootView: View, bottomArea: View) {
+        val decor = rootView.rootView ?: return
+        if (!bottomArea.isShown || decor.height <= 0) return
+        val decorLoc = IntArray(2)
+        val bottomLoc = IntArray(2)
+        decor.getLocationOnScreen(decorLoc)
+        bottomArea.getLocationOnScreen(bottomLoc)
+        if (bottomLoc[1] + bottomArea.height >= decorLoc[1] + decor.height) return
+
+        var changed = false
+        (bottomArea.layoutParams as? ViewGroup.MarginLayoutParams)?.let { lp ->
+            if (lp.bottomMargin != 0) {
+                lp.bottomMargin = 0
+                bottomArea.layoutParams = lp
+                changed = true
+            }
+        }
+        if (decor is ViewGroup) {
+            for (i in 0 until decor.childCount) {
+                val child = decor.getChildAt(i)
+                if (idName(child) == "navigationBarBackground") {
+                    if (child.visibility != View.GONE) {
+                        child.visibility = View.GONE
+                        changed = true
+                    }
+                    continue
+                }
+                val lp = child.layoutParams as? ViewGroup.MarginLayoutParams ?: continue
+                if (lp.bottomMargin > 0) {
+                    lp.bottomMargin = 0
+                    child.layoutParams = lp
+                    changed = true
+                }
+            }
+        }
+        if (changed) {
+            diag(
+                "compensate: cleared bottom margins / hid navigationBarBackground" +
+                    " (decorBottom=${decorLoc[1] + decor.height} bottomAreaBottom=${bottomLoc[1] + bottomArea.height})"
+            )
         }
     }
 
@@ -472,6 +563,8 @@ class MainHook : IXposedHookLoadPackage {
         val fullscreenArea = frameViews.first.get() ?: return
         val rootView = frameViews.second.get() ?: return
         val bottomArea = frameViews.third.get() ?: return
+        // 兼容 legacy（targetSdk<35）输入法：先修正被系统收缩的窗口内容区与底栏 margin
+        compensateLegacyWindowInsets(rootView, bottomArea)
         val contentView = (0 until inputFrame.childCount)
             .firstNotNullOfOrNull { index ->
                 inputFrame.getChildAt(index).takeIf { it.visibility == View.VISIBLE }
