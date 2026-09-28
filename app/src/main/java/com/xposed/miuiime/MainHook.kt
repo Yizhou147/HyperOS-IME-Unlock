@@ -486,30 +486,31 @@ class MainHook : IXposedHookLoadPackage {
 
     /**
      * 修复百度拼音等"把工具栏/候选栏挂在 candidatesView 里"的输入法：
-     * MIUI 重排后 fullscreenArea 是固定高度（透明区+候选区），而这类输入法的
-     * candidatesArea 是 wrap_content，只占 fullscreenArea 顶部一小截，
-     * 工具栏与键盘之间出现整屏级空洞（实测百度官方版 751px）。
-     * 用 fullscreenArea 的 paddingTop 把 candidatesArea 整体下压，
-     * 使其底边贴住 inputArea 顶（工具栏内部是 bottom-gravity，会紧贴键盘）。
-     * 不能拉伸 candidatesArea 子链为 match——百度的容器会反向溢出到屏幕外（实测工具栏消失）。
+     * MIUI 重排后 fullscreenArea 远高于此输入法实际的 candidatesArea（wrap），
+     * 工具栏贴在区域顶部，与键盘之间出现整屏级空洞（实测百度官方版 751px）。
+     * fullscreenArea 里 MIUI 自带的 extractArea 是 weight=1.0 的占位（GONE 时不参与布局），
+     * 把它改为 INVISIBLE 即可吃掉上方空间，把 candidatesArea 压到区域底部（紧贴键盘），
+     * 且窗口/候选高度变化时由 LinearLayout 自动跟随。
+     * 注意不能用 padding/拉伸子链方案：fullscreenArea 是 wrap 时会被反向撑高（实测自激累积）。
      * 微信/Gboard 的 candidatesArea 为空或不可见，直接跳过。
      */
-    private fun stretchDetachedCandidatesArea(fullscreenArea: ViewGroup) {
-        val candidatesArea = (0 until fullscreenArea.childCount)
-            .map { fullscreenArea.getChildAt(it) }
-            .filterIsInstance<ViewGroup>()
+    private fun anchorCandidatesAreaToKeyboard(fullscreenArea: ViewGroup) {
+        if (fullscreenArea.paddingTop != 0) {
+            fullscreenArea.setPadding(
+                fullscreenArea.paddingLeft, 0,
+                fullscreenArea.paddingRight, fullscreenArea.paddingBottom
+            )
+        }
+        val children = (0 until fullscreenArea.childCount).map { fullscreenArea.getChildAt(it) }
+        val candidatesArea = children.filterIsInstance<ViewGroup>()
             .firstOrNull { idName(it) == "candidatesArea" && it.visibility == View.VISIBLE }
             ?: return
-        if (candidatesArea.height <= 0 || fullscreenArea.height <= 0) return
-        val slack = fullscreenArea.height - fullscreenArea.paddingTop - candidatesArea.height
-        if (slack in 50..3000) {
-            Diag.dumpLine("anchor candidatesArea: slack=$slack padTop ${fullscreenArea.paddingTop} -> ${fullscreenArea.paddingTop + slack}")
-            fullscreenArea.setPadding(
-                fullscreenArea.paddingLeft,
-                fullscreenArea.paddingTop + slack,
-                fullscreenArea.paddingRight,
-                fullscreenArea.paddingBottom
-            )
+        val extractArea = children.firstOrNull { idName(it) == "extractArea" } ?: return
+        val gap = fullscreenArea.height - candidatesArea.height
+        if (candidatesArea.height <= 0 || gap <= 50) return
+        if (extractArea.visibility == View.GONE) {
+            Diag.dumpLine("anchor: gap=$gap extractArea GONE->INVISIBLE")
+            extractArea.visibility = View.INVISIBLE
         }
     }
 
@@ -520,7 +521,7 @@ class MainHook : IXposedHookLoadPackage {
         val bottomArea = frameViews.third.get() ?: return
         // 兼容 legacy（targetSdk<35）输入法：先修正被系统收缩的窗口内容区与底栏 margin
         compensateLegacyWindowInsets(rootView, bottomArea)
-        stretchDetachedCandidatesArea(fullscreenArea)
+        anchorCandidatesAreaToKeyboard(fullscreenArea)
         giveFullscreenAreaSlackWeight(fullscreenArea, bottomArea)
         val contentView = (0 until inputFrame.childCount)
             .firstNotNullOfOrNull { index ->
