@@ -458,6 +458,26 @@ class MainHook : IXposedHookLoadPackage {
         }
     }
 
+    /**
+     * legacy 输入法窗口被 edge-to-edge 化后 DecorView 变高，但 MIUI 给
+     * fullscreenArea 的是固定高度（w=0），多出来的余量落在底栏下方 = 底栏离底。
+     * 受支持的输入法（如微信键盘）里 MIUI 自己就是 weight=1.0，这里对齐：
+     * 仅当确实存在余量且当前 weight 为 0 时设置。
+     */
+    private fun giveFullscreenAreaSlackWeight(fullscreenArea: ViewGroup, bottomArea: View) {
+        val lp = fullscreenArea.layoutParams as? LinearLayout.LayoutParams ?: return
+        if (lp.weight > 0f) return
+        val parent = fullscreenArea.parent as? ViewGroup ?: return
+        val decor = bottomArea.rootView
+        val loc = IntArray(2)
+        bottomArea.getLocationInWindow(loc)
+        val slack = decor.height - (loc[1] + bottomArea.height)
+        if (slack <= 0 || slack > 400) return
+        Diag.dumpLine("slackWeight: slack=$slack -> fullscreenArea.weight=1")
+        lp.weight = 1f
+        fullscreenArea.layoutParams = lp
+    }
+
     /** 取 View 的资源 id 名，用于识别 DecorView 里的 navigationBarBackground */
     private fun idName(v: View): String = kotlin.runCatching {
         if (v.id == View.NO_ID) "-" else v.resources.getResourceEntryName(v.id)
@@ -505,6 +525,7 @@ class MainHook : IXposedHookLoadPackage {
         // 兼容 legacy（targetSdk<35）输入法：先修正被系统收缩的窗口内容区与底栏 margin
         compensateLegacyWindowInsets(rootView, bottomArea)
         stretchDetachedCandidatesArea(fullscreenArea)
+        giveFullscreenAreaSlackWeight(fullscreenArea, bottomArea)
         val contentView = (0 until inputFrame.childCount)
             .firstNotNullOfOrNull { index ->
                 inputFrame.getChildAt(index).takeIf { it.visibility == View.VISIBLE }
