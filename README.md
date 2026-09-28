@@ -45,21 +45,53 @@ Xposed API Version >= 93
 本模块在读取端兜住该问题：hook `InputMethodBottomManager` 与 `InputMethodServiceInjector`
 的 `isImeSupport()` 布尔方法，使其恒返回 `true`（与上游 PR #34 一致）。
 
+## 修复说明（1.1）
+
+### 百度拼音等"工具栏挂在候选区"的输入法：顶栏悬空、底栏离底
+
+百度拼音官方版（targetSdk 34）解锁后出现两个症状：不打字时工具栏与键盘之间空出整屏级
+空洞（实测 751px），打字/切换输入法后 MIUI 底栏离屏幕底部 138px。根因：
+
+1. 这类输入法把工具栏 / 候选栏挂在 `candidatesView` 里，MIUI 重排后 `candidatesArea`
+   是 wrap_content，只占 fullscreenArea 顶部一小截，工具栏悬在区域顶部；
+2. 键盘收起 / 服务切换的过渡态里 MIUI 底栏会塌缩到窗口顶部（高度 0 但仍 isShown），
+   legacy 补偿逻辑误判"底栏没贴底"，清掉了输入法实际需要的窗口 margin，
+   窗口被撑满而内容仍是旧几何，底栏反而离底。
+
+修复：过渡态护栏（底栏高度不足导航栏 inset 时不补偿）；把 MIUI 预留的 `extractArea`
+占位由 GONE 改为 INVISIBLE，用 LinearLayout 权重把候选区自然压到键盘正上方；
+fullscreenArea 缺 weight 时补上 weight=1.0 吸收窗口余量。
+
 ## 下载
 
 云编译产物：push 到 `main` 分支后由 GitHub Actions 自动构建并发布到 [Releases](../../releases)
+
+每个版本提供两个安装包（签名相同，按需二选一）：
+
+- `Unlock_HyperOS_IME.apk` —— 正常版
+- `Unlock_HyperOS_IME_diag.apk` —— 带诊断版：把输入法窗口视图树 / insets 写入
+  `/data/data/<输入法包名>/files/miuiime_diag.txt`，遇到布局问题反馈时请附上该文件
+  （本 ROM logcat 被系统关闭，这是唯一取证通道；root 下 `cp` 到 `/data/local/tmp` 再取出）
 
 所有构建使用同一固定签名，可直接覆盖安装升级，无需卸载旧版。
 
 ## 特别说明
 
-1. 全面屏优化与百度输入法官方版存在兼容问题，这不属于本模块 BUG。
-2. 其他版本的 MIUI / HyperOS 适配依赖系统内部实现，存在不可用的可能性。
-3. 如仍有个别输入法布局异常（例如键盘异常抬高），请附带输入法版本号、系统版本号、是否在切换输入法后才出现，以及日志反馈。
-4. 不接受任何为特定输入法适配 xxx 的请求，这不现实不合理。
-5. 使用了小白条沉浸模块的系统，可能在部分输入法上无法使用全面屏优化。
+1. 其他版本的 MIUI / HyperOS 适配依赖系统内部实现，存在不可用的可能性。
+2. 如仍有个别输入法布局异常（例如键盘异常抬高），请改用带诊断版安装，附带输入法版本号、
+   系统版本号、是否在切换输入法后才出现，以及 `/data/data/<输入法包名>/files/miuiime_diag.txt` 反馈。
+3. 不接受任何为特定输入法适配 xxx 的请求，这不现实不合理。
+4. 使用了小白条沉浸模块的系统，可能在部分输入法上无法使用全面屏优化。
 
 ## 更新日志
+
+1.1
+
+    修复百度拼音官方版等"工具栏挂在候选区"的输入法解锁后顶栏悬空（实测 751px 空洞）、
+    打字/切换输入法后底栏离底 138px 的问题
+    （过渡态护栏 + extractArea 占位下压候选区 + fullscreenArea 余量权重）
+    Releases 每个版本提供两个包：正常版与带诊断版（视图树/insets 写入
+    /data/data/<输入法包名>/files/miuiime_diag.txt，便于反馈取证）
 
 1.0
 

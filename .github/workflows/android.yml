@@ -36,31 +36,39 @@ jobs:
             gradle-${{ runner.os }}-
 
       - name: Build release APK
-        run: ./gradlew :app:assembleRelease --stacktrace
+        run: ./gradlew :app:assembleRelease --stacktrace -Pdiag=false
+
+      - name: Build diagnostic release APK
+        run: ./gradlew :app:assembleRelease --stacktrace -Pdiag=true
 
       - name: Sign release APK
         run: |
           set -euo pipefail
-          APK=$(ls app/build/outputs/apk/release/*.apk | head -n1)
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n1)
           # 使用固定签名（keystore 来自仓库 Secrets），不再每次 keytool 临时生成，
           # 否则每次构建的签名都不同，产物无法覆盖安装。
           KEYSTORE="$RUNNER_TEMP/release.jks"
           printf '%s' "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > "$KEYSTORE"
           mkdir -p signed
-          "$APKSIGNER" sign --ks "$KEYSTORE" \
-            --ks-key-alias "${{ secrets.SIGNING_KEY_ALIAS }}" \
-            --ks-pass "pass:${{ secrets.SIGNING_STORE_PASSWORD }}" \
-            --key-pass "pass:${{ secrets.SIGNING_KEY_PASSWORD }}" \
-            --out signed/Unlock_HyperOS_IME.apk "$APK"
-          echo "=== 签名证书（应按固定指纹输出）==="
-          "$APKSIGNER" verify --print-certs signed/Unlock_HyperOS_IME.apk | head -6
+          for APK in app/build/outputs/apk/release/*.apk; do
+            case "$APK" in
+              *_diag.apk) OUT=signed/Unlock_HyperOS_IME_diag.apk ;;
+              *)          OUT=signed/Unlock_HyperOS_IME.apk ;;
+            esac
+            "$APKSIGNER" sign --ks "$KEYSTORE" \
+              --ks-key-alias "${{ secrets.SIGNING_KEY_ALIAS }}" \
+              --ks-pass "pass:${{ secrets.SIGNING_STORE_PASSWORD }}" \
+              --key-pass "pass:${{ secrets.SIGNING_KEY_PASSWORD }}" \
+              --out "$OUT" "$APK"
+            echo "=== 签名证书（$OUT，应按固定指纹输出）==="
+            "$APKSIGNER" verify --print-certs "$OUT" | head -3
+          done
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: Unlock_HyperOS_IME
-          path: signed/Unlock_HyperOS_IME.apk
+          path: signed/*.apk
           retention-days: 30
 
       - name: Create Release
@@ -72,7 +80,11 @@ jobs:
           body: |
             自动云编译构建 ${{ github.run_number }}（push 到 main 自动发布）
             更新内容见 README「更新日志」。
-          files: signed/Unlock_HyperOS_IME.apk
+            Unlock_HyperOS_IME.apk 为正常版；Unlock_HyperOS_IME_diag.apk 为带诊断版，
+            会把视图树/insets 写入 /data/data/<输入法包名>/files/miuiime_diag.txt，供反馈问题时取证。
+          files: |
+            signed/Unlock_HyperOS_IME.apk
+            signed/Unlock_HyperOS_IME_diag.apk
           prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

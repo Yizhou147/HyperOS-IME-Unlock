@@ -12,10 +12,16 @@ android {
         applicationId = "com.xposed.miuiime"
         minSdk = 28
         targetSdk = 34
-        versionName = "1.0"
+        versionName = "1.1"
         // versionCode 不从 1 重新开始：本模块此前以 1.17(15) 对外发布，
         // 降到 1 会让已安装用户无法覆盖升级（Android 拒绝降级安装）。
-        versionCode = 16
+        versionCode = 17
+        // -Pdiag=true 构建带文件诊断的调试版（logcat 被系统关闭时的取证通道）
+        buildConfigField("boolean", "DIAG", (project.findProperty("diag") ?: "false").toString())
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     buildTypes {
@@ -38,7 +44,8 @@ android {
         }
     }
     applicationVariants.all {
-        val outputFileName = "Unlock_HyperOS_IME-${versionName}_${buildType.name}.apk"
+        val diagSuffix = if (project.findProperty("diag") == "true") "_diag" else ""
+        val outputFileName = "Unlock_HyperOS_IME-${versionName}_${buildType.name}${diagSuffix}.apk"
         outputs.all {
             val output = this as? com.android.build.gradle.internal.api.BaseVariantOutputImpl
             output?.outputFileName = outputFileName

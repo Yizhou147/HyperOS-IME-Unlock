@@ -232,7 +232,7 @@ class MainHook : IXposedHookLoadPackage {
     }
 
     private fun hookDiag() {
-        Diag.enabled = true
+        if (!Diag.enabled) return
         kotlin.runCatching {
             val ims = loadClassOrNull("android.inputmethodservice.InputMethodService")
                 ?: return

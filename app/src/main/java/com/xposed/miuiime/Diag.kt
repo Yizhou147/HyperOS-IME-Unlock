@@ -17,7 +17,7 @@ import java.util.Locale
  * 仅存在于 debug 分支，不合并回 main。
  */
 object Diag {
-    @Volatile var enabled = false
+    @Volatile var enabled = BuildConfig.DIAG
 
     private var dir: File? = null
     private val timeFmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
