@@ -326,6 +326,11 @@ class MainHook : IXposedHookLoadPackage {
     private fun compensateLegacyWindowInsets(rootView: View, bottomArea: View) {
         val decor = rootView.rootView ?: return
         if (!bottomArea.isShown || decor.height <= 0) return
+        // 键盘收起/服务切换的过渡态里，底栏会塌缩到窗口顶部（height=0 但仍 isShown），
+        // 此时不能当作"底栏没贴底"去清 margin，否则窗口被撑满而内容仍是旧几何，底栏反而离底。
+        val navigationInset = decor.rootWindowInsets
+            ?.getInsets(WindowInsets.Type.navigationBars())?.bottom ?: 0
+        if (navigationInset <= 0 || bottomArea.height < navigationInset) return
         val decorLoc = IntArray(2)
         val bottomLoc = IntArray(2)
         decor.getLocationOnScreen(decorLoc)
@@ -458,6 +463,40 @@ class MainHook : IXposedHookLoadPackage {
         if (v.id == View.NO_ID) "-" else v.resources.getResourceEntryName(v.id)
     }.getOrDefault("-")
 
+    /**
+     * 修复百度拼音等"把工具栏/候选栏挂在 candidatesView 里"的输入法：
+     * MIUI 重排后 fullscreenArea 是固定高度（透明区+候选区），而这类输入法的
+     * candidatesArea 是 wrap_content，只占 fullscreenArea 顶部一小截，
+     * 工具栏与键盘之间出现整屏级空洞（实测百度官方版 751px）。
+     * 把 candidatesArea 及其"等高直通"子容器链拉伸为 MATCH_PARENT，
+     * 工具栏自身是 bottom-gravity，会自然落到键盘正上方。
+     * 微信/Gboard 的 candidatesArea 为空或不可见，直接跳过。
+     */
+    private fun stretchDetachedCandidatesArea(fullscreenArea: ViewGroup) {
+        val candidatesArea = (0 until fullscreenArea.childCount)
+            .map { fullscreenArea.getChildAt(it) }
+            .filterIsInstance<ViewGroup>()
+            .firstOrNull { idName(it) == "candidatesArea" } ?: return
+        if (candidatesArea.visibility != View.VISIBLE) return
+        val targetHeight = fullscreenArea.height
+        if (targetHeight <= 0 || candidatesArea.height >= targetHeight - 50) return
+        Diag.dumpLine("stretch candidatesArea ${candidatesArea.height} -> match of $targetHeight")
+        var node: ViewGroup = candidatesArea
+        while (true) {
+            val lp = node.layoutParams ?: break
+            if (lp.height != ViewGroup.LayoutParams.MATCH_PARENT) {
+                lp.height = ViewGroup.LayoutParams.MATCH_PARENT
+                node.layoutParams = lp
+            }
+            val passThrough = (0 until node.childCount)
+                .map { node.getChildAt(it) }
+                .filterIsInstance<ViewGroup>()
+                .firstOrNull { it.visibility == View.VISIBLE && it.height == node.height }
+                ?: break
+            node = passThrough
+        }
+    }
+
     private fun reconcileMiuiBottomFrame(inputFrame: ViewGroup) {
         val frameViews = miuiBottomFrameViews[inputFrame] ?: return
         val fullscreenArea = frameViews.first.get() ?: return
@@ -465,6 +504,7 @@ class MainHook : IXposedHookLoadPackage {
         val bottomArea = frameViews.third.get() ?: return
         // 兼容 legacy（targetSdk<35）输入法：先修正被系统收缩的窗口内容区与底栏 margin
         compensateLegacyWindowInsets(rootView, bottomArea)
+        stretchDetachedCandidatesArea(fullscreenArea)
         val contentView = (0 until inputFrame.childCount)
             .firstNotNullOfOrNull { index ->
                 inputFrame.getChildAt(index).takeIf { it.visibility == View.VISIBLE }
