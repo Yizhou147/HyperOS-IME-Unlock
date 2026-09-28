@@ -141,6 +141,18 @@ object Diag {
         runCatching { File(d, "miuiime_diag.txt").appendText(sb.toString()) }
     }
 
+    fun findDeclared(cls: Class<*>?, name: String): java.lang.reflect.Method? {
+        var c = cls
+        while (c != null && c != Any::class.java) {
+            c.declaredMethods.firstOrNull { it.name == name }?.let {
+                it.isAccessible = true
+                return it
+            }
+            c = c.superclass
+        }
+        return null
+    }
+
     fun dumpLine(line: String) {
         if (!enabled) return
         val d = dir ?: return

@@ -235,17 +235,18 @@ class MainHook : IXposedHookLoadPackage {
         kotlin.runCatching {
             val ims = loadClassOrNull("android.inputmethodservice.InputMethodService")
                 ?: return
-            ims.declaredMethods.firstOrNull { it.name == "onCreate" }?.let { m ->
-                m.isAccessible = true
+            Diag.findDeclared(ims, "onCreate")?.let { m ->
                 m.hookAfter { param ->
                     (param.thisObject as? Context)?.let { Diag.init(it) }
-                    Diag.dumpLine("onCreate ${param.thisObject.javaClass.name}")
+                    Diag.dumpLine("onCreate ${param.thisObject.javaClass.name}" +
+                        "@${System.identityHashCode(param.thisObject)}")
                 }
             }
             ims.declaredMethods.firstOrNull { it.name == "onWindowShown" }?.let { m ->
                 m.isAccessible = true
                 m.hookAfter { param ->
                     val service = param.thisObject as? InputMethodService ?: return@hookAfter
+                    Diag.init(service)
                     runCatching {
                         val decor = service.window?.window?.decorView
                         Diag.dump("windowShown", decor, throttleMs = 250)
@@ -392,11 +393,15 @@ class MainHook : IXposedHookLoadPackage {
         }
 
         clazz.declaredMethods
-            .filter { it.name == "onWindowShown" || it.name == "changeViewForMiuiBottom" }
+            .filter {
+                it.name == "onWindowShown" || it.name == "changeViewForMiuiBottom" ||
+                    it.name == "onDestroy"
+            }
             .forEach { method ->
                 kotlin.runCatching {
                     method.isAccessible = true
-                    method.hookAfter {
+                    method.hookAfter { param ->
+                        Diag.dumpLine("manager.${method.name} helper@${System.identityHashCode(param.thisObject)}")
                         reconcileCurrentImeFrame(clazz)
                     }
                 }.onFailure {
