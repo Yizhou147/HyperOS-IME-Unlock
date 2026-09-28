@@ -9,6 +9,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.inputmethod.InputMethodManager
+import android.widget.LinearLayout
 import com.github.kyuubiran.ezxhelper.init.EzXHelperInit
 import com.github.kyuubiran.ezxhelper.utils.Log
 import com.github.kyuubiran.ezxhelper.utils.findAllMethods
@@ -488,32 +489,27 @@ class MainHook : IXposedHookLoadPackage {
      * MIUI 重排后 fullscreenArea 是固定高度（透明区+候选区），而这类输入法的
      * candidatesArea 是 wrap_content，只占 fullscreenArea 顶部一小截，
      * 工具栏与键盘之间出现整屏级空洞（实测百度官方版 751px）。
-     * 把 candidatesArea 及其"等高直通"子容器链拉伸为 MATCH_PARENT，
-     * 工具栏自身是 bottom-gravity，会自然落到键盘正上方。
+     * 用 fullscreenArea 的 paddingTop 把 candidatesArea 整体下压，
+     * 使其底边贴住 inputArea 顶（工具栏内部是 bottom-gravity，会紧贴键盘）。
+     * 不能拉伸 candidatesArea 子链为 match——百度的容器会反向溢出到屏幕外（实测工具栏消失）。
      * 微信/Gboard 的 candidatesArea 为空或不可见，直接跳过。
      */
     private fun stretchDetachedCandidatesArea(fullscreenArea: ViewGroup) {
         val candidatesArea = (0 until fullscreenArea.childCount)
             .map { fullscreenArea.getChildAt(it) }
             .filterIsInstance<ViewGroup>()
-            .firstOrNull { idName(it) == "candidatesArea" } ?: return
-        if (candidatesArea.visibility != View.VISIBLE) return
-        val targetHeight = fullscreenArea.height
-        if (targetHeight <= 0 || candidatesArea.height >= targetHeight - 50) return
-        Diag.dumpLine("stretch candidatesArea ${candidatesArea.height} -> match of $targetHeight")
-        var node: ViewGroup = candidatesArea
-        while (true) {
-            val lp = node.layoutParams ?: break
-            if (lp.height != ViewGroup.LayoutParams.MATCH_PARENT) {
-                lp.height = ViewGroup.LayoutParams.MATCH_PARENT
-                node.layoutParams = lp
-            }
-            val passThrough = (0 until node.childCount)
-                .map { node.getChildAt(it) }
-                .filterIsInstance<ViewGroup>()
-                .firstOrNull { it.visibility == View.VISIBLE && it.height == node.height }
-                ?: break
-            node = passThrough
+            .firstOrNull { idName(it) == "candidatesArea" && it.visibility == View.VISIBLE }
+            ?: return
+        if (candidatesArea.height <= 0 || fullscreenArea.height <= 0) return
+        val slack = fullscreenArea.height - fullscreenArea.paddingTop - candidatesArea.height
+        if (slack in 50..3000) {
+            Diag.dumpLine("anchor candidatesArea: slack=$slack padTop ${fullscreenArea.paddingTop} -> ${fullscreenArea.paddingTop + slack}")
+            fullscreenArea.setPadding(
+                fullscreenArea.paddingLeft,
+                fullscreenArea.paddingTop + slack,
+                fullscreenArea.paddingRight,
+                fullscreenArea.paddingBottom
+            )
         }
     }
 
