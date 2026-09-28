@@ -73,6 +73,7 @@ class MainHook : IXposedHookLoadPackage {
         val isNonCustomize = !miuiImeList.contains(lpparam.packageName)
         if (isNonCustomize) {
             hookImeWindowEdgeToEdge()
+            hookDiag()
             val sInputMethodServiceInjector =
                 loadClassOrNull("android.inputmethodservice.InputMethodServiceInjector")
                     ?: loadClassOrNull("android.inputmethodservice.InputMethodServiceStubImpl")
@@ -229,6 +230,54 @@ class MainHook : IXposedHookLoadPackage {
         }
     }
 
+    private fun hookDiag() {
+        Diag.enabled = true
+        kotlin.runCatching {
+            val ims = loadClassOrNull("android.inputmethodservice.InputMethodService")
+                ?: return
+            ims.declaredMethods.firstOrNull { it.name == "onCreate" }?.let { m ->
+                m.isAccessible = true
+                m.hookAfter { param ->
+                    (param.thisObject as? Context)?.let { Diag.init(it) }
+                    Diag.dumpLine("onCreate ${param.thisObject.javaClass.name}")
+                }
+            }
+            ims.declaredMethods.firstOrNull { it.name == "onWindowShown" }?.let { m ->
+                m.isAccessible = true
+                m.hookAfter { param ->
+                    val service = param.thisObject as? InputMethodService ?: return@hookAfter
+                    runCatching {
+                        val decor = service.window?.window?.decorView
+                        Diag.dump("windowShown", decor, throttleMs = 250)
+                        Diag.dumpLine("windowShown frame=" +
+                            runCatching { service.window?.window?.decorView?.let { d ->
+                                val loc = IntArray(2); d.getLocationOnScreen(loc)
+                                "${loc[0]},${loc[1]} ${d.width}x${d.height}"
+                            } })
+                    }
+                }
+            }
+            ims.declaredMethods.firstOrNull { it.name == "onComputeInsets" }?.let { m ->
+                m.isAccessible = true
+                m.hookAfter { param ->
+                    val insets = param.args[0]
+                    val fields = buildString {
+                        insets.javaClass.declaredFields.forEach { f ->
+                            f.isAccessible = true
+                            val v = runCatching { f.get(insets) }.getOrNull()
+                            if (v is Int || v is android.graphics.Rect) {
+                                append(f.name).append('=').append(v).append(' ')
+                            }
+                        }
+                    }
+                    Diag.dumpLine("onComputeInsets $fields")
+                }
+            }
+        }.onFailure {
+            Diag.dumpLine("hookDiag failed: $it")
+        }
+    }
+
     /**
      * 让输入法窗口 edge-to-edge。
      *
@@ -282,6 +331,8 @@ class MainHook : IXposedHookLoadPackage {
         bottomArea.getLocationOnScreen(bottomLoc)
         if (bottomLoc[1] + bottomArea.height >= decorLoc[1] + decor.height) return
 
+        Diag.dumpLine("compensate: bottomBottom=${bottomLoc[1] + bottomArea.height} " +
+            "decorBottom=${decorLoc[1] + decor.height} -> 执行补偿")
         (bottomArea.layoutParams as? ViewGroup.MarginLayoutParams)?.let { lp ->
             if (lp.bottomMargin != 0) {
                 lp.bottomMargin = 0
@@ -372,9 +423,19 @@ class MainHook : IXposedHookLoadPackage {
             }
         }
         inputFrame.post { reconcileMiuiBottomFrame(inputFrame) }
+        Diag.dumpLine("register: fs=${System.identityHashCode(fullscreenArea)} " +
+            "fsH=${fullscreenArea.layoutParams?.height} if=${System.identityHashCode(inputFrame)} " +
+            "bottom=${System.identityHashCode(bottomArea)} bottomH=${bottomArea.height} " +
+            "bottomMB=${(bottomArea.layoutParams as? ViewGroup.MarginLayoutParams)?.bottomMargin}")
+        listOf(400L, 1200L, 2500L).forEach { delay ->
+            inputFrame.postDelayed({
+                Diag.dump("register+$delay", rootView.rootView)
+            }, delay)
+        }
     }
 
     private fun reconcileCurrentImeFrame(clazz: Class<*>) {
+        Diag.dumpManagerFields("reconcileCurrent", clazz)
         val currentInputFrame = kotlin.runCatching {
             clazz.getStaticObject("sBottomViewHelper")
                 .getObjectAs<ViewGroup>("mInputFrame")
@@ -412,6 +473,11 @@ class MainHook : IXposedHookLoadPackage {
             isBottomAreaActive(rootView, inputFrame, bottomArea, it)
         } == true
 
+        Diag.dump("reconcile if=${System.identityHashCode(inputFrame)} " +
+            "navInset=$navigationInset bottomActive=$bottomAreaActive " +
+            "content=${contentView?.javaClass?.name?.substringAfterLast('.')} " +
+            "contentPB=${contentView?.paddingBottom}", rootView.rootView, throttleMs = 600)
+
         if (!bottomAreaActive) {
             restoreMiuiBottomFrame(inputFrame, fullscreenArea)
             return
@@ -443,6 +509,8 @@ class MainHook : IXposedHookLoadPackage {
 
         originalImeContentBottomPaddings.putIfAbsent(contentView, contentView.paddingBottom)
         if (!isAlreadyAdjusted) {
+            Diag.dumpLine("adjust: ${contentView.javaClass.name.substringAfterLast('.')}.paddingBottom " +
+                "${contentView.paddingBottom} -> ${contentView.paddingBottom - navigationInset}")
             contentView.setPadding(
                 contentView.paddingLeft,
                 contentView.paddingTop,
