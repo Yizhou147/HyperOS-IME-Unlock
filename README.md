@@ -64,7 +64,8 @@ fullscreenArea 缺 weight 时补上 weight=1.0 吸收窗口余量。
 
 ## 下载
 
-云编译产物：push 到 `main` 分支后由 GitHub Actions 自动构建并发布到 [Releases](../../releases)
+云编译产物：push 到 `main` 分支后由 GitHub Actions 自动构建，维护人验收后手动发布到
+[Releases](../../releases)
 
 每个版本提供两个安装包（签名相同，按需二选一）：
 

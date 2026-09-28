@@ -36,10 +36,13 @@ jobs:
             gradle-${{ runner.os }}-
 
       - name: Build release APK
-        run: ./gradlew :app:assembleRelease --stacktrace -Pdiag=false
-
-      - name: Build diagnostic release APK
-        run: ./gradlew :app:assembleRelease --stacktrace -Pdiag=true
+        run: |
+          set -euo pipefail
+          mkdir -p unsigned
+          ./gradlew :app:assembleRelease --stacktrace -Pdiag=false
+          cp app/build/outputs/apk/release/*.apk unsigned/normal.apk
+          ./gradlew :app:assembleRelease --stacktrace -Pdiag=true
+          cp app/build/outputs/apk/release/*.apk unsigned/diag.apk
 
       - name: Sign release APK
         run: |
@@ -50,16 +53,17 @@ jobs:
           KEYSTORE="$RUNNER_TEMP/release.jks"
           printf '%s' "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > "$KEYSTORE"
           mkdir -p signed
-          for APK in app/build/outputs/apk/release/*.apk; do
-            case "$APK" in
-              *_diag.apk) OUT=signed/Unlock_HyperOS_IME_diag.apk ;;
-              *)          OUT=signed/Unlock_HyperOS_IME.apk ;;
-            esac
-            "$APKSIGNER" sign --ks "$KEYSTORE" \
-              --ks-key-alias "${{ secrets.SIGNING_KEY_ALIAS }}" \
-              --ks-pass "pass:${{ secrets.SIGNING_STORE_PASSWORD }}" \
-              --key-pass "pass:${{ secrets.SIGNING_KEY_PASSWORD }}" \
-              --out "$OUT" "$APK"
+          "$APKSIGNER" sign --ks "$KEYSTORE" \
+            --ks-key-alias "${{ secrets.SIGNING_KEY_ALIAS }}" \
+            --ks-pass "pass:${{ secrets.SIGNING_STORE_PASSWORD }}" \
+            --key-pass "pass:${{ secrets.SIGNING_KEY_PASSWORD }}" \
+            --out signed/Unlock_HyperOS_IME.apk unsigned/normal.apk
+          "$APKSIGNER" sign --ks "$KEYSTORE" \
+            --ks-key-alias "${{ secrets.SIGNING_KEY_ALIAS }}" \
+            --ks-pass "pass:${{ secrets.SIGNING_STORE_PASSWORD }}" \
+            --key-pass "pass:${{ secrets.SIGNING_KEY_PASSWORD }}" \
+            --out signed/Unlock_HyperOS_IME_diag.apk unsigned/diag.apk
+          for OUT in signed/Unlock_HyperOS_IME.apk signed/Unlock_HyperOS_IME_diag.apk; do
             echo "=== 签名证书（$OUT，应按固定指纹输出）==="
             "$APKSIGNER" verify --print-certs "$OUT" | head -3
           done
@@ -71,20 +75,5 @@ jobs:
           path: signed/*.apk
           retention-days: 30
 
-      - name: Create Release
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: v${{ github.run_number }}
-          name: 解锁 HyperOS 全面屏优化 build ${{ github.run_number }}
-          body: |
-            自动云编译构建 ${{ github.run_number }}（push 到 main 自动发布）
-            更新内容见 README「更新日志」。
-            Unlock_HyperOS_IME.apk 为正常版；Unlock_HyperOS_IME_diag.apk 为带诊断版，
-            会把视图树/insets 写入 /data/data/<输入法包名>/files/miuiime_diag.txt，供反馈问题时取证。
-          files: |
-            signed/Unlock_HyperOS_IME.apk
-            signed/Unlock_HyperOS_IME_diag.apk
-          prerelease: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 不自动发布 Release：构建产物只进 Artifacts，
+      # 由维护人验收后手动 gh release create（见 AGENTS/工作总结规则）。
